@@ -259,14 +259,16 @@ void check_thread_divergence(Module *m)
 
   tda.runOnModule(*m);
 
-  int divBranchCount = 0, branchCount = 0, instCount = 0, threadIdxCallsCount = 0;
-
   for (auto &F : *m)
   {
     if (!F.hasExactDefinition())
       continue;
 
-    instCount += F.getInstructionCount();
+
+    // Count tainted values by instruction type
+    auto taintMap = tda.taint;
+    unordered_map<string, int> taintCount;
+    int divBranchCount = 0, branchCount = 0,  threadIdxCallsCount = 0;
 
     dbgs() << "Function \"" << F.getName() << "\":\n";
 
@@ -287,56 +289,39 @@ void check_thread_divergence(Module *m)
           branchCount++;
         }
       }
-    }
-    dbgs() << "\n";
-  }
 
-  // Count tainted values by instruction type
-  auto taintMap = tda.taint;
-  unordered_map<string, int> taintCount;
-  for (auto t = taintMap.begin(), e = taintMap.end(); t != e; ++t)
-  {
-    if (t->second)
-    {
-      Instruction *inst = dyn_cast<Instruction>(t->first);
-
-      // Handle threadIdx calls
-      if (inst && inst->getOpcode() == Instruction::Call)
+      for (auto &inst : bb)
       {
-        CallInst *call = dyn_cast<CallInst>(inst);
-        if (call)
-        {
-          Function *F = call->getCalledFunction();
-          if (F && F->getName().find("_threadIdx_") != F->getName().npos)
+        if (tda.isDependent(&inst))
+        {      
+          // Handle threadIdx calls
+          if (inst.getOpcode() == Instruction::Call)
           {
-            threadIdxCallsCount++;
-            continue;
+            CallInst &call = cast<CallInst>(inst);
+            Function *F = call.getCalledFunction();
+            if (F && F->getName().find("_threadIdx_") != F->getName().npos)
+            {
+              threadIdxCallsCount++;
+              continue;
+            }
           }
+
+          string instType = inst.getOpcodeName();
+          taintCount[instType]++;
         }
       }
-
-      if (inst)
-      {
-        string instType = inst->getOpcodeName();
-        taintCount[instType]++;
-      }
-      else
-      {
-        dbgs() << "Tainted value is not an instruction:";
-        t->first->dump();
-        taintCount["unknown"]++;
-      }
     }
-  }
 
-  dbgs() << "Number of branches: " << branchCount << "\n";
-  dbgs() << "Number of divergent branches: " << divBranchCount << "\n";
-  dbgs() << "Number of instructions: " << instCount << "\n";
-  dbgs() << "Number of threadIdx calls: " << threadIdxCallsCount << "\n";
-  dbgs() << "Divergent(thread-idx tainted) values by parent instruction type(excluding threadIdx calls)\n";
-  for (auto t = taintCount.begin(), e = taintCount.end(); t != e; ++t)
-  {
-    dbgs() << "  " << t->first << ": " << t->second << "\n";
+    dbgs() << "\tNumber of branches: " << branchCount << "\n";
+    dbgs() << "\tNumber of divergent branches: " << divBranchCount << "\n";
+    dbgs() << "\tNumber of instructions: " << F.getInstructionCount() << "\n";
+    dbgs() << "\tNumber of threadIdx calls: " << threadIdxCallsCount << "\n";
+    dbgs() << "\tDivergent(thread-idx tainted) values by parent instruction type(excluding threadIdx calls):\n";
+    for (auto t = taintCount.begin(), e = taintCount.end(); t != e; ++t)
+    {
+      dbgs() << "\t\t" << t->first << ": " << t->second << "\n";
+    }
+    dbgs() << "\n";
   }
 
   dbgs()<<"End of thread divergence check\n";
