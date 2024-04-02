@@ -268,7 +268,7 @@ void check_thread_divergence(Module *m)
     // Count tainted values by instruction type
     auto taintMap = tda.taint;
     unordered_map<string, int> taintCount;
-    int divBranchCount = 0, branchCount = 0,  threadIdxCallsCount = 0;
+    int divBranchCount = 0, branchCount = 0,  threadIdxCallsCount = 0, barrierCount = 0;
 
     dbgs() << "Function \"" << F.getName() << "\":\n";
 
@@ -294,14 +294,20 @@ void check_thread_divergence(Module *m)
       {
         if (tda.isDependent(&inst))
         {      
-          // Handle threadIdx calls
           if (inst.getOpcode() == Instruction::Call)
           {
             CallInst &call = cast<CallInst>(inst);
             Function *F = call.getCalledFunction();
+            // Handle threadIdx calls
             if (F && F->getName().find("_threadIdx_") != F->getName().npos)
             {
               threadIdxCallsCount++;
+              continue;
+            }
+            // Handle synchronization calls
+            if (F && F->getName().find("llvm.nvvm.barrier0") != F->getName().npos)
+            {
+              barrierCount++;
               continue;
             }
           }
@@ -316,6 +322,9 @@ void check_thread_divergence(Module *m)
     dbgs() << "\tNumber of divergent branches: " << divBranchCount << "\n";
     dbgs() << "\tNumber of instructions: " << F.getInstructionCount() << "\n";
     dbgs() << "\tNumber of threadIdx calls: " << threadIdxCallsCount << "\n";
+    dbgs() << "\tNumber of synchronization instructions: " << barrierCount << "\n";
+    dbgs() << "\tNumber of divergent loads: " << taintCount["load"] << "\n";
+    dbgs() << "\tNumber of divergent stores: " << taintCount["store"] << "\n";
     dbgs() << "\tDivergent(thread-idx tainted) values by parent instruction type(excluding threadIdx calls):\n";
     for (auto t = taintCount.begin(), e = taintCount.end(); t != e; ++t)
     {
