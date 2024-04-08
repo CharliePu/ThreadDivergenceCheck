@@ -24,6 +24,25 @@ using namespace llvm;
 
 namespace ThreadDivergence
 {
+
+  bool isThreadIdxCall(llvm::StringRef name)
+  {
+    return name.find("_threadIdx_") != name.npos 
+    || name.find("vx_thread_id") != name.npos || name.find("vx_warp_id") != name.npos
+    || name.find("_local_id_");
+  }
+
+  bool isBlockIdxCall(llvm::StringRef name)
+  {
+    return name.find("_blockIdx_") != name.npos || name.find("vx_block_id") != name.npos;
+  }
+
+  bool isBarrierCall(llvm::StringRef name)
+  {
+    // llvm.nvvm.barrier0
+    return name.find("llvm") != name.npos && name.find("barrier") != name.npos;
+  }
+
   class ThreadDivergenceAnalysis
   {
   public:
@@ -222,10 +241,17 @@ namespace ThreadDivergence
         if (auto F = CI->getCalledFunction())
         {
           // is ThreadIdx Call
-          if (F->getName().find("_threadIdx_") != F->getName().npos)
+          if (isThreadIdxCall(F->getName()))
           {
             return true;
           }
+
+          // is BlockIdx Call
+          if (isBlockIdxCall(F->getName()))
+          {
+            return true;
+          }
+
           // Not an intrinsic, but a real function call
           if (!F->empty())
           {
@@ -268,11 +294,11 @@ void check_thread_divergence(Module *m)
     // Count tainted values by instruction type
     auto taintMap = tda.taint;
     unordered_map<string, int> taintCount;
-    int divBranchCount = 0, branchCount = 0,  threadIdxCallsCount = 0, barrierCount = 0;
+    int divBranchCount = 0, branchCount = 0,  threadIdxCallsCount = 0, blockIdxCallsCount = 0, barrierCount = 0;
 
     dbgs() << "Function \"" << F.getName() << "\":\n";
 
-    for (auto &bb : F.getBasicBlockList())
+    for (auto &bb : F)
     {
       auto terminator = bb.getTerminator();
       if (auto branch = dyn_cast<BranchInst>(terminator))
@@ -299,13 +325,19 @@ void check_thread_divergence(Module *m)
             CallInst &call = cast<CallInst>(inst);
             Function *F = call.getCalledFunction();
             // Handle threadIdx calls
-            if (F && F->getName().find("_threadIdx_") != F->getName().npos)
+            if (F && ThreadDivergence::isThreadIdxCall(F->getName()))
             {
               threadIdxCallsCount++;
               continue;
             }
+            // Handle blockIdx calls
+            if (F && ThreadDivergence::isBlockIdxCall(F->getName()))
+            {
+              blockIdxCallsCount++;
+              continue;
+            }
             // Handle synchronization calls
-            if (F && F->getName().find("llvm.nvvm.barrier0") != F->getName().npos)
+            if (F && ThreadDivergence::isBarrierCall(F->getName()))
             {
               barrierCount++;
               continue;
@@ -322,6 +354,7 @@ void check_thread_divergence(Module *m)
     dbgs() << "\tNumber of divergent branches: " << divBranchCount << "\n";
     dbgs() << "\tNumber of instructions: " << F.getInstructionCount() << "\n";
     dbgs() << "\tNumber of threadIdx calls: " << threadIdxCallsCount << "\n";
+    dbgs() << "\tNumber of blockIdx calls: " << blockIdxCallsCount << "\n";
     dbgs() << "\tNumber of synchronization instructions: " << barrierCount << "\n";
     dbgs() << "\tNumber of divergent loads: " << taintCount["load"] << "\n";
     dbgs() << "\tNumber of divergent stores: " << taintCount["store"] << "\n";
