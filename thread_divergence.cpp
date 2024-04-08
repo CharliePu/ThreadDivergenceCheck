@@ -27,14 +27,13 @@ namespace ThreadDivergence
 
   bool isThreadIdxCall(llvm::StringRef name)
   {
-    return name.find("_threadIdx_") != name.npos 
-    || name.find("vx_thread_id") != name.npos || name.find("vx_warp_id") != name.npos
+    return name.find("_threadIdx_") != name.npos
     || name.find("_local_id_");
   }
 
   bool isBlockIdxCall(llvm::StringRef name)
   {
-    return name.find("_blockIdx_") != name.npos || name.find("vx_block_id") != name.npos;
+    return name.find("_blockIdx_") != name.npos;
   }
 
   bool isBarrierCall(llvm::StringRef name)
