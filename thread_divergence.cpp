@@ -18,6 +18,9 @@
 #include <unordered_map>
 #include <queue>
 #include <utility>
+#include <vector>
+#include <algorithm>
+#include <iterator>
 
 using namespace std;
 using namespace llvm;
@@ -28,7 +31,7 @@ namespace ThreadDivergence
   bool isThreadIdxCall(llvm::StringRef name)
   {
     return name.find("_threadIdx_") != name.npos
-    || name.find("_local_id_");
+    || name.find("_local_id_") != name.npos;
   }
 
   bool isBlockIdxCall(llvm::StringRef name)
@@ -278,25 +281,27 @@ namespace ThreadDivergence
   };
 }
 
-void check_thread_divergence(Module *m)
+ThreadDivergenceStats check_thread_divergence(Module *m)
 {
   ThreadDivergence::ThreadDivergenceAnalysis tda;
-
   tda.runOnModule(*m);
+
+  ThreadDivergenceStats stats;
+  stats.taintedValueTypes = {"load", "store"};
 
   for (auto &F : *m)
   {
     if (!F.hasExactDefinition())
       continue;
 
+    dbgs() << "Function \"" << F.getName() << "\":\n";
+    FunctionStats funcStats{};
+
 
     // Count tainted values by instruction type
     auto taintMap = tda.taint;
-    unordered_map<string, int> taintCount;
-    int divBranchCount = 0, branchCount = 0,  threadIdxCallsCount = 0, blockIdxCallsCount = 0, barrierCount = 0;
 
-    dbgs() << "Function \"" << F.getName() << "\":\n";
-
+    // Count the number of branches
     for (auto &bb : F)
     {
       auto terminator = bb.getTerminator();
@@ -309,9 +314,9 @@ void check_thread_divergence(Module *m)
           {
             dbgs() << "\tThread divergence at terminator: ";
             branch->dump();
-            divBranchCount++;
+            funcStats.divBranchesCount++;
           }
-          branchCount++;
+          funcStats.totalBranchesCount++;
         }
       }
 
@@ -326,39 +331,44 @@ void check_thread_divergence(Module *m)
             // Handle threadIdx calls
             if (F && ThreadDivergence::isThreadIdxCall(F->getName()))
             {
-              threadIdxCallsCount++;
+              funcStats.threadIdCallsCount++;
               continue;
             }
             // Handle blockIdx calls
             if (F && ThreadDivergence::isBlockIdxCall(F->getName()))
             {
-              blockIdxCallsCount++;
+              funcStats.blockIdCallsCount++;
               continue;
             }
             // Handle synchronization calls
             if (F && ThreadDivergence::isBarrierCall(F->getName()))
             {
-              barrierCount++;
+              funcStats.barrierCount++;
               continue;
             }
           }
 
           string instType = inst.getOpcodeName();
-          taintCount[instType]++;
+          funcStats.taintCount[instType]++;
+          funcStats.totalInstructionsCount++;
+          stats.taintedValueTypes.insert(instType);
         }
       }
     }
 
-    dbgs() << "\tNumber of branches: " << branchCount << "\n";
-    dbgs() << "\tNumber of divergent branches: " << divBranchCount << "\n";
-    dbgs() << "\tNumber of instructions: " << F.getInstructionCount() << "\n";
-    dbgs() << "\tNumber of threadIdx calls: " << threadIdxCallsCount << "\n";
-    dbgs() << "\tNumber of blockIdx calls: " << blockIdxCallsCount << "\n";
-    dbgs() << "\tNumber of synchronization instructions: " << barrierCount << "\n";
-    dbgs() << "\tNumber of divergent loads: " << taintCount["load"] << "\n";
-    dbgs() << "\tNumber of divergent stores: " << taintCount["store"] << "\n";
+    funcStats.totalInstructionsCount = F.getInstructionCount();
+    stats.functionStats[F.getName().str()] = funcStats;
+
+    dbgs() << "\tNumber of branches: " << funcStats.totalBranchesCount << "\n";
+    dbgs() << "\tNumber of divergent branches: " << funcStats.divBranchesCount << "\n";
+    dbgs() << "\tNumber of instructions: " << funcStats.totalInstructionsCount << "\n";
+    dbgs() << "\tNumber of threadIdx calls: " << funcStats.threadIdCallsCount << "\n";
+    dbgs() << "\tNumber of blockIdx calls: " << funcStats.blockIdCallsCount << "\n";
+    dbgs() << "\tNumber of synchronization instructions: " << funcStats.barrierCount << "\n";
+    dbgs() << "\tNumber of divergent loads: " << funcStats.taintCount["load"] << "\n";
+    dbgs() << "\tNumber of divergent stores: " << funcStats.taintCount["store"] << "\n";
     dbgs() << "\tDivergent(thread-idx tainted) values by parent instruction type(excluding threadIdx calls):\n";
-    for (auto t = taintCount.begin(), e = taintCount.end(); t != e; ++t)
+    for (auto t = funcStats.taintCount.begin(), e = funcStats.taintCount.end(); t != e; ++t)
     {
       dbgs() << "\t\t" << t->first << ": " << t->second << "\n";
     }
@@ -366,4 +376,6 @@ void check_thread_divergence(Module *m)
   }
 
   dbgs()<<"End of thread divergence check\n";
+
+  return stats;
 }
